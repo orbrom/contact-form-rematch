@@ -10,7 +10,11 @@ import logging
 # Application setup
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
-CSV_FILE = 'user_data.csv'
+# Allow overriding CSV storage path via environment variable (useful for cloud volumes)
+CSV_FILE = os.environ.get('CSV_FILE', 'user_data.csv')
+# Ensure the directory for the CSV file exists (handles cloud volume mounts like /data)
+_csv_dir = os.path.dirname(CSV_FILE) or '.'
+os.makedirs(_csv_dir, exist_ok=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
