@@ -18,6 +18,12 @@ except Exception:  # psycopg2 may not be available locally
 	psycopg2 = None
 	RealDictCursor = None
 
+# New: requests for SendGrid API
+try:
+	import requests
+except Exception:
+	requests = None
+
 # Application setup
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
@@ -37,6 +43,9 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'orbrom97@gmail.com')  # CHANGE THIS
 SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD', 'rloj qlxt xapn wnub')  # CHANGE THIS
 RECIPIENT_EMAIL = os.environ.get('RECIPIENT_EMAIL', 'harshamot.brom@gmail.com')  # CHANGE THIS
+
+# SendGrid configuration (optional fallback)
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
 
 # Database configuration
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -228,41 +237,75 @@ def success():
 	return "Thank you for your submission! We have received your data and a notification email has been sent."
 
 
-def send_notification_email(data):
-	"""Send notification email with improved error handling and security"""
+def _send_email_via_smtp(subject: str, body: str) -> bool:
 	try:
-		msg = EmailMessage()
-		msg['Subject'] = 'New Form Submission'
-		msg['From'] = SENDER_EMAIL
-		msg['To'] = RECIPIENT_EMAIL
-		
-		# Escape user input to prevent email header injection
-		safe_name = data['name'].replace('\n', '').replace('\r', '')
-		safe_email = data['email_from'].replace('\n', '').replace('\r', '')
-		safe_message = data['message'].replace('\n', ' ').replace('\r', ' ')
-		
-		# Customize the email body with your desired syntax
-		email_body = f"Hello,\n\nA new submission has been received.\n\n" \
-					 f"Name: {safe_name}\n" \
-					 f"Email: {safe_email}\n" \
-					 f"Message:\n{safe_message}\n\n" \
-					 f"Best regards,\nForm Bot"
-		
-		msg.set_content(email_body)
-		
 		with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as server:
 			server.starttls()
 			server.login(SENDER_EMAIL, SENDER_PASSWORD)
+			msg = EmailMessage()
+			msg['Subject'] = subject
+			msg['From'] = SENDER_EMAIL
+			msg['To'] = RECIPIENT_EMAIL
+			msg.set_content(body)
 			server.send_message(msg)
-		
-		logger.info("Email sent successfully!")
-		
-	except smtplib.SMTPAuthenticationError:
-		logger.error("SMTP authentication failed. Check email credentials.")
-	except smtplib.SMTPException as e:
-		logger.error(f"SMTP error occurred: {e}")
+		return True
 	except Exception as e:
-		logger.error(f"Unexpected error sending email: {e}")
+		logger.error(f"SMTP send failed: {e}")
+		return False
+
+
+def _send_email_via_sendgrid(subject: str, body: str) -> bool:
+	if not SENDGRID_API_KEY or requests is None:
+		return False
+	try:
+		resp = requests.post(
+			'https://api.sendgrid.com/v3/mail/send',
+			headers={
+				'Authorization': f'Bearer {SENDGRID_API_KEY}',
+				'Content-Type': 'application/json'
+			},
+			json={
+				'personalizations': [{
+					'to': [{'email': RECIPIENT_EMAIL}],
+					'subject': subject
+				}],
+				'from': {'email': SENDER_EMAIL},
+				'content': [{'type': 'text/plain', 'value': body}]
+			}
+		)
+		if 200 <= resp.status_code < 300:
+			return True
+		logger.error(f"SendGrid send failed: {resp.status_code} {resp.text}")
+		return False
+	except Exception as e:
+		logger.error(f"SendGrid exception: {e}")
+		return False
+
+
+def send_notification_email(data):
+	"""Send notification email using SMTP; fallback to SendGrid API if SMTP blocked."""
+	# Escape user input to prevent header injection
+	safe_name = data['name'].replace('\n', '').replace('\r', '')
+	safe_email = data['email_from'].replace('\n', '').replace('\r', '')
+	safe_message = data['message'].replace('\n', ' ').replace('\r', ' ')
+	
+	subject = 'New Form Submission'
+	body = (
+		"Hello,\n\nA new submission has been received.\n\n"
+		f"Name: {safe_name}\n"
+		f"Email: {safe_email}\n"
+		f"Message:\n{safe_message}\n\n"
+		"Best regards,\nForm Bot"
+	)
+	
+	if _send_email_via_smtp(subject, body):
+		logger.info("Email sent successfully via SMTP!")
+		return
+	# fallback
+	if _send_email_via_sendgrid(subject, body):
+		logger.info("Email sent successfully via SendGrid API!")
+		return
+	logger.error("All email methods failed.")
 
 # Error handlers for better debugging
 @app.errorhandler(500)
