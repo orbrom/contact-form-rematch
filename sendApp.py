@@ -44,6 +44,9 @@ SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'orbrom97@gmail.com')  # CHANGE TH
 SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD', 'rloj qlxt xapn wnub')  # CHANGE THIS
 RECIPIENT_EMAIL = os.environ.get('RECIPIENT_EMAIL', 'harshamot.brom@gmail.com')  # CHANGE THIS
 
+# Email provider selection: smtp|sendgrid|resend|auto (default smtp per user request)
+EMAIL_PROVIDER = os.environ.get('EMAIL_PROVIDER', 'smtp').lower()
+
 # SendGrid configuration (optional fallback)
 SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
 
@@ -313,7 +316,7 @@ def _send_email_via_resend(subject: str, body: str) -> bool:
 
 
 def send_notification_email(data):
-	"""Send notification email using SMTP; fallback to SendGrid or Resend HTTP APIs if SMTP blocked."""
+	"""Send notification email according to EMAIL_PROVIDER setting."""
 	# Escape user input to prevent header injection
 	safe_name = data['name'].replace('\n', '').replace('\r', '')
 	safe_email = data['email_from'].replace('\n', '').replace('\r', '')
@@ -328,6 +331,26 @@ def send_notification_email(data):
 		"Best regards,\nForm Bot"
 	)
 	
+	provider = EMAIL_PROVIDER
+	if provider == 'smtp':
+		if _send_email_via_smtp(subject, body):
+			logger.info("Email sent successfully via SMTP!")
+			return
+		logger.error("SMTP failed and EMAIL_PROVIDER=smtp")
+		return
+	elif provider == 'sendgrid':
+		if _send_email_via_sendgrid(subject, body):
+			logger.info("Email sent successfully via SendGrid API!")
+			return
+		logger.error("SendGrid failed and EMAIL_PROVIDER=sendgrid")
+		return
+	elif provider == 'resend':
+		if _send_email_via_resend(subject, body):
+			logger.info("Email sent successfully via Resend API!")
+			return
+		logger.error("Resend failed and EMAIL_PROVIDER=resend")
+		return
+	# auto: try smtp -> sendgrid -> resend
 	if _send_email_via_smtp(subject, body):
 		logger.info("Email sent successfully via SMTP!")
 		return
@@ -337,7 +360,7 @@ def send_notification_email(data):
 	if _send_email_via_resend(subject, body):
 		logger.info("Email sent successfully via Resend API!")
 		return
-	logger.error("All email methods failed.")
+	logger.error("All email methods failed (auto mode).")
 
 # Error handlers for better debugging
 @app.errorhandler(500)
