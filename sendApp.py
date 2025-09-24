@@ -398,6 +398,25 @@ def debug_submissions():
 		return {"backend": "csv", "rows": []}
 
 
+# Debug endpoint to trigger a test email (token protected)
+@app.route('/debug/test-email')
+def debug_test_email():
+	token = request.args.get('token')
+	if not DEBUG_TOKEN or token != DEBUG_TOKEN:
+		return "Unauthorized", 401
+	data = {
+		'name': 'Test User',
+		'email_from': 'test@example.com',
+		'message': 'This is a test email triggered from /debug/test-email.'
+	}
+	try:
+		send_notification_email(data)
+		return {"status": "ok"}
+	except Exception as e:
+		logger.error(f"Test email failed: {e}")
+		return {"status": "error", "error": str(e)}, 500
+
+
 # Initialize database table at startup (best-effort)
 init_db()
 
