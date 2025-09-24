@@ -42,6 +42,9 @@ RECIPIENT_EMAIL = os.environ.get('RECIPIENT_EMAIL', 'harshamot.brom@gmail.com') 
 DATABASE_URL = os.environ.get('DATABASE_URL')
 _DB_AVAILABLE = psycopg2 is not None and bool(DATABASE_URL)
 
+# Debug viewer token (set value in Railway Variables, e.g., a random string)
+DEBUG_TOKEN = os.environ.get('DEBUG_TOKEN')
+
 # Thread lock for CSV operations
 csv_lock = threading.Lock()
 
@@ -270,6 +273,54 @@ def internal_error(error):
 @app.errorhandler(404)
 def not_found(error):
 	return "Page not found.", 404
+
+
+# Debug endpoint to view recent submissions (token protected)
+@app.route('/debug/submissions')
+def debug_submissions():
+	token = request.args.get('token')
+	if not DEBUG_TOKEN or token != DEBUG_TOKEN:
+		return "Unauthorized", 401
+	# Try Postgres first
+	conn = get_db_connection()
+	if conn is not None:
+		try:
+			with conn:
+				with conn.cursor(cursor_factory=RealDictCursor) as cur:
+					cur.execute(
+						"""
+						SELECT id, name, email_from, LEFT(message, 200) AS message_preview, created_at
+						FROM submissions
+						ORDER BY created_at DESC
+						LIMIT 20
+						"""
+					)
+					rows = cur.fetchall()
+					return {"backend": "postgres", "rows": rows}
+		except Exception as e:
+			logger.error(f"Debug fetch Postgres failed: {e}")
+		finally:
+			try:
+				conn.close()
+			except Exception:
+				pass
+	# Fallback: read CSV last 20 lines
+	try:
+		if not os.path.exists(CSV_FILE):
+			return {"backend": "csv", "rows": []}
+		rows = []
+		with open(CSV_FILE, 'r', encoding='utf-8') as f:
+			reader = csv.DictReader(f)
+			for row in reader:
+				rows.append({
+					"name": row.get('name'),
+					"email_from": row.get('email_from'),
+					"message_preview": (row.get('message') or '')[:200]
+				})
+		return {"backend": "csv", "rows": rows[-20:]}
+	except Exception as e:
+		logger.error(f"Debug fetch CSV failed: {e}")
+		return {"backend": "csv", "rows": []}
 
 
 # Initialize database table at startup (best-effort)
