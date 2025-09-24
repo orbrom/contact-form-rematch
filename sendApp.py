@@ -18,7 +18,7 @@ except Exception:  # psycopg2 may not be available locally
 	psycopg2 = None
 	RealDictCursor = None
 
-# New: requests for SendGrid API
+# New: requests for email HTTP APIs
 try:
 	import requests
 except Exception:
@@ -46,6 +46,10 @@ RECIPIENT_EMAIL = os.environ.get('RECIPIENT_EMAIL', 'harshamot.brom@gmail.com') 
 
 # SendGrid configuration (optional fallback)
 SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+
+# Resend configuration (optional fallback)
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
+RESEND_FROM = os.environ.get('RESEND_FROM', SENDER_EMAIL)
 
 # Database configuration
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -282,8 +286,34 @@ def _send_email_via_sendgrid(subject: str, body: str) -> bool:
 		return False
 
 
+def _send_email_via_resend(subject: str, body: str) -> bool:
+	if not RESEND_API_KEY or requests is None:
+		return False
+	try:
+		resp = requests.post(
+			'https://api.resend.com/emails',
+			headers={
+				'Authorization': f'Bearer {RESEND_API_KEY}',
+				'Content-Type': 'application/json'
+			},
+			json={
+				'from': RESEND_FROM,
+				'to': [RECIPIENT_EMAIL],
+				'subject': subject,
+				'text': body
+			}
+		)
+		if 200 <= resp.status_code < 300:
+			return True
+		logger.error(f"Resend send failed: {resp.status_code} {resp.text}")
+		return False
+	except Exception as e:
+		logger.error(f"Resend exception: {e}")
+		return False
+
+
 def send_notification_email(data):
-	"""Send notification email using SMTP; fallback to SendGrid API if SMTP blocked."""
+	"""Send notification email using SMTP; fallback to SendGrid or Resend HTTP APIs if SMTP blocked."""
 	# Escape user input to prevent header injection
 	safe_name = data['name'].replace('\n', '').replace('\r', '')
 	safe_email = data['email_from'].replace('\n', '').replace('\r', '')
@@ -301,9 +331,11 @@ def send_notification_email(data):
 	if _send_email_via_smtp(subject, body):
 		logger.info("Email sent successfully via SMTP!")
 		return
-	# fallback
 	if _send_email_via_sendgrid(subject, body):
 		logger.info("Email sent successfully via SendGrid API!")
+		return
+	if _send_email_via_resend(subject, body):
+		logger.info("Email sent successfully via Resend API!")
 		return
 	logger.error("All email methods failed.")
 
